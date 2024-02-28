@@ -9,3 +9,4 @@ dist/
 *.tar.gz
 *.zip
 docs/site
+compressed_model/

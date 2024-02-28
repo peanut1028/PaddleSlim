@@ -1,0 +1,17 @@
+Global:
+  reader_config: E:\LGJ\program\PaddleSeg\configs\ocrnet\ocrnet_hrnetw18_dualmodal_1200x1200_200k.yml
+  model_dir: E:\LGJ\program\PaddleSeg\output\ocrnet\infer_model
+  model_filename: model.pdmodel
+  params_filename: model.pdiparams
+  deploy_hardware: gpu
+  input_shapes: [1,6,1200,1200]
+
+TrainConfig:
+  epochs: 14
+  eval_iter: 400
+  learning_rate: 2.5e-03
+  optimizer_builder:
+    optimizer: 
+      type: SGD
+    weight_decay: 0.0005
+  

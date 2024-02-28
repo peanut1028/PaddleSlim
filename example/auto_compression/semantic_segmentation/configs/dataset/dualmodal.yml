@@ -1,0 +1,64 @@
+batch_size: 4
+iters: 50000
+
+train_dataset:
+  type: Dualmodal
+  dataset_root: E:\Project\AL019_IGBT\dataset\2cls\wire_p_l\v3
+  transforms:
+    # - type: ContextMix
+    - type: RandomVerticalFlip
+    - type: ResizeStepScaling
+      min_scale_factor: 0.75
+      max_scale_factor: 1.25
+      scale_step_size: 0.25
+    # - type: RandomRotationDual
+    #   max_rotation: 90
+    - type: RandomPaddingCrop
+      crop_size: [1200, 1200]
+    - type: RandomHorizontalFlip
+    - type: RandomDistortDual
+      brightness_range: 0.4
+      contrast_range: 0.4
+      saturation_range: 0.4
+    - type: RandomBlur
+      prob: 0.2
+    - type: NormalizeDual # BGR order
+      mean: [0.15540452, 0.1786599, 0.16864243]
+      std: [0.14914116, 0.16898306, 0.15260287]
+  mode: train
+
+val_dataset:
+  type: Dualmodal
+  dataset_root: E:\Project\AL019_IGBT\dataset\2cls\wire_p_l\v3\
+  transforms:
+    - type: NormalizeDual     # BGR order
+      mean: [0.12810583, 0.19142132, 0.19298103]
+      std: [0.12603381, 0.17869398, 0.17883179]
+  mode: val
+
+
+optimizer:
+  type: SGD
+  momentum: 0.9
+  weight_decay: 4.0e-5
+
+lr_scheduler:
+  type: PolynomialDecay
+  learning_rate: 0.01
+  end_lr: 0
+  power: 0.9
+
+loss:
+  types:
+    - type: CrossEntropyLoss
+      weight: [0.2, 0.3, 0.5]
+  coef: [1]
+
+
+model:
+  type: OCRNet
+  backbone:
+    type: HRNet_W18
+    pretrained: https://bj.bcebos.com/paddleseg/dygraph/hrnet_w18_ssld.tar.gz
+  num_classes: 3
+  backbone_indices: [0]

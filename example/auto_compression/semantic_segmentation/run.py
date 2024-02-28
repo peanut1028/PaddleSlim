@@ -17,7 +17,7 @@ import argparse
 import random
 import paddle
 import numpy as np
-from paddleseg.cvlibs import Config as PaddleSegDataConfig
+from paddleseg.cvlibs import Config, SegBuilder
 from paddleseg.utils import worker_init_fn, metrics
 from paddleseg.core.infer import reverse_transform
 
@@ -31,12 +31,12 @@ def argsparser():
     parser.add_argument(
         '--config_path',
         type=str,
-        default=None,
+        default=r'E:\LGJ\program\PaddleSlim\example\auto_compression\semantic_segmentation\configs\ocrnet\ocrnet_auto.yaml',
         help="path of compression strategy config.")
     parser.add_argument(
         '--save_dir',
         type=str,
-        default=None,
+        default=r'./compressed_model',
         help="directory to save compressed model.")
     parser.add_argument(
         '--devices',
@@ -63,13 +63,13 @@ def eval_function(exe, compiled_test_program, test_feed_names, test_fetch_list):
     print("Start evaluating (total_samples: {}, total_iters: {})...".format(
         len(eval_dataset), total_iters))
 
-    for iters, (image, label) in enumerate(loader):
+    for iters, data in enumerate(loader):
         paddle.enable_static()
 
-        label = np.array(label).astype('int64')
+        label = np.array(data['label']).astype('int64')
         ori_shape = np.array(label).shape[-2:]
 
-        image = np.array(image)
+        image = np.array(data['img'])
         logits = exe.run(compiled_test_program,
                          feed={test_feed_names[0]: image},
                          fetch_list=test_fetch_list,
@@ -78,15 +78,13 @@ def eval_function(exe, compiled_test_program, test_feed_names, test_fetch_list):
         paddle.disable_static()
         logit = logits[0]
 
-        logit = reverse_transform(
-            paddle.to_tensor(logit),
-            ori_shape,
-            eval_dataset.transforms.transforms,
-            mode='bilinear')
+        if data['trans_info'] is not None:
+            logit = reverse_transform(
+                paddle.to_tensor(logit),
+                data['trans_info'],
+                mode='bilinear')
         pred = paddle.to_tensor(logit)
-        if len(
-                pred.shape
-        ) == 4:  # for humanseg model whose prediction is distribution but not class id
+        if len(pred.shape) == 4:  # for humanseg model whose prediction is distribution but not class id
             pred = paddle.argmax(pred, axis=1, keepdim=True, dtype='int32')
 
         intersect_area, pred_area, label_area = metrics.calculate_area(
@@ -121,7 +119,7 @@ def reader_wrapper(reader, input_name):
 
     def gen():
         for i, data in enumerate(reader()):
-            imgs = np.array(data[0])
+            imgs = np.array(data['img'])
             yield {input_name: imgs}
 
     return gen
@@ -140,14 +138,15 @@ def main(args):
         place = paddle.CPUPlace()
         paddle.set_device('cpu')
     # step1: load dataset config and create dataloader
-    data_cfg = PaddleSegDataConfig(config['reader_config'])
-    train_dataset = data_cfg.train_dataset
+    cfg = Config(config['reader_config'])
+    builder = SegBuilder(cfg)
+    train_dataset = builder.train_dataset
     global eval_dataset
-    eval_dataset = data_cfg.val_dataset
+    eval_dataset = builder.val_dataset
     batch_size = config.get('batch_size')
     batch_sampler = paddle.io.DistributedBatchSampler(
         train_dataset,
-        batch_size=batch_size if batch_size else data_cfg.batch_size,
+        batch_size=batch_size if batch_size else cfg.batch_size,
         shuffle=True,
         drop_last=True)
     train_loader = paddle.io.DataLoader(
