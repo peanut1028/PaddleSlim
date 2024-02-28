@@ -25,6 +25,7 @@ class DygraphPruningCollections(PruningCollections):
                  skip_leaves=True,
                  prune_type='conv',
                  input_dtype='float32'):
+        super(DygraphPruningCollections, self).__init__()
         assert prune_type in ['conv', 'fc'
                               ], "Please select conv or fc as your prune type."
         _logger.debug("Parsing model with input: {}".format(inputs))
