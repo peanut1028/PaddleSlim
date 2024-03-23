@@ -126,6 +126,9 @@ class PruningCollection(object):
 class PruningCollections(object):
     def __init__(self):
         self._collections = None
+        self.collections = []
+        self.visited = {}
+        self.unsupported_warnings = set()
 
     def __iter__(self):
         return iter(self._collections)
@@ -136,6 +139,56 @@ class PruningCollections(object):
             if len(_var.outputs()) == 0:
                 ret.append(_var.name())
         return ret
+
+    def process_param(self, 
+                      _param, 
+                      prune_axis,
+                      skip_vars):
+        pruned_params = []
+        param = self.graph.var(_param)
+        if param is None:
+            _logger.warning(
+                f"Couldn't find relative variables of {_param} because {_param} is not in target program or model. Please make sure {_param} is in your program if you are using static API of PaddlePaddle. And make sure your model in correct mode and contains {_param} if you are using dynamic API of PaddlePaddle."
+            )
+            return 
+        target_op = param.outputs()[0]
+        if target_op.type() == 'conditional_block':
+            for op in param.outputs():
+                if op.type() in PRUNE_WORKER._module_dict.keys():
+                    cls = PRUNE_WORKER.get(op.type())
+                    worker = cls(op,
+                                    pruned_params=pruned_params,
+                                    visited=self.visited,
+                                    skip_stranger=True)
+        else:
+            cls = PRUNE_WORKER.get(target_op.type())
+            if cls is None:
+                _logger.warning("No worker for operator: {}".format(
+                    target_op.type()))
+                return
+            worker = cls(target_op,
+                            pruned_params=pruned_params,
+                            visited=self.visited,
+                            skip_stranger=True)
+            worker.skip_vars = skip_vars
+        try:
+            # visited_backup = copy.deepcopy(worker.visited)
+            worker.prune(param, pruned_axis=prune_axis, transforms=[])
+        except UnsupportOpError as e:
+            self.visited.clear()
+            # self.visited.update(visited_backup)
+            self.unsupported_warnings.add(e.args)
+        else:
+            if len(pruned_params) != 0:
+                collection = PruningCollection(master=({
+                    "name": param.name(),
+                    "axis": prune_axis,
+                }))
+                for _param, _axis, _transform, _op in pruned_params:
+                    tmp = PruningDetails(_param, _axis, _transform, _op)
+                    collection.add(tmp)
+                self.collections.append(collection)        
+
 
     def create_pruning_collections(self,
                                    params,
@@ -176,71 +229,37 @@ class PruningCollections(object):
     
         """
         if not isinstance(graph, GraphWrapper):
-            graph = GraphWrapper(graph)
-
+            self.graph = GraphWrapper(graph)
+        else:
+            self.graph = graph
         skip_vars = [] if skip_vars is None else skip_vars
         if skip_leaves:
-            leaves = self._find_leaves(graph)
+            leaves = self._find_leaves(self.graph)
             skip_vars.extend(leaves)
             _logger.warning(
                 "Leaves {} will be skipped when parsing graph.".format(leaves))
-        visited = {}
-        collections = []
-        unsupported_warnings = set()
 
         if prune_type == 'conv':
             prune_axis = 0
         elif prune_type == 'fc':
             prune_axis = 1
 
+        # multi threads - for loop
+        import threading
+        threads = []
         for _param in params:
-            pruned_params = []
-            param = graph.var(_param)
-            if param is None:
-                _logger.warning(
-                    f"Couldn't find relative variables of {_param} because {_param} is not in target program or model. Please make sure {_param} is in your program if you are using static API of PaddlePaddle. And make sure your model in correct mode and contains {_param} if you are using dynamic API of PaddlePaddle."
-                )
-                continue
-            target_op = param.outputs()[0]
-            if target_op.type() == 'conditional_block':
-                for op in param.outputs():
-                    if op.type() in PRUNE_WORKER._module_dict.keys():
-                        cls = PRUNE_WORKER.get(op.type())
-                        worker = cls(op,
-                                     pruned_params=pruned_params,
-                                     visited=visited,
-                                     skip_stranger=skip_stranger)
-            else:
-                cls = PRUNE_WORKER.get(target_op.type())
-                if cls is None:
-                    _logger.warning("No worker for operator: {}".format(
-                        target_op.type()))
-                    continue
-                worker = cls(target_op,
-                             pruned_params=pruned_params,
-                             visited=visited,
-                             skip_stranger=skip_stranger)
-                worker.skip_vars = skip_vars
-            try:
-                visited_backup = copy.deepcopy(worker.visited)
-                worker.prune(param, pruned_axis=prune_axis, transforms=[])
-            except UnsupportOpError as e:
-                visited.clear()
-                visited.update(visited_backup)
-                unsupported_warnings.add(e.args)
-            else:
-                if len(pruned_params) != 0:
-                    collection = PruningCollection(master=({
-                        "name": param.name(),
-                        "axis": prune_axis,
-                    }))
-                    for _param, _axis, _transform, _op in pruned_params:
-                        tmp = PruningDetails(_param, _axis, _transform, _op)
-                        collection.add(tmp)
-                    collections.append(collection)
-        for warn in unsupported_warnings:
+            thread = threading.Thread(target=self.process_param, args=(_param, 
+                                                                       prune_axis,
+                                                                       skip_vars,))
+            threads.append(thread)
+            thread.start()
+
+        for thread in threads:
+            thread.join()
+
+        for warn in self.unsupported_warnings:
             _logger.warning(warn)
-        self._collections = collections
+        self._collections = self.collections
 
         return self._collections
 
